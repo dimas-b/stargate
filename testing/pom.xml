@@ -30,6 +30,13 @@
       <scope>test</scope>
     </dependency>
     <dependency>
+      <groupId>io.stargate.db.dse</groupId>
+      <artifactId>persistence-dse-6.8</artifactId>
+      <version>${project.version}</version>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-exec</artifactId>
       <version>1.3</version>
@@ -230,6 +237,14 @@
           <threadCountSuites>1</threadCountSuites>
           <reuseForks>true</reuseForks>
           <forkCount>1</forkCount>
+          <properties>
+            <configurationParameters>
+              junit.jupiter.execution.parallel.enabled = true
+              junit.jupiter.execution.parallel.mode.default = same_thread
+              junit.jupiter.execution.parallel.mode.classes.default = concurrent
+              junit.jupiter.execution.parallel.config.fixed.parallelism = 6
+            </configurationParameters>
+          </properties>
           <systemPropertyVariables>
             <stargate.libdir>${basedir}/../stargate-lib</stargate.libdir>
           </systemPropertyVariables>

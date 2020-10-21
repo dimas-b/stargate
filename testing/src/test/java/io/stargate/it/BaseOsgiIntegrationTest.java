@@ -15,10 +15,7 @@
  */
 package io.stargate.it;
 
-import static io.stargate.it.storage.ClusterScope.SHARED;
-
 import io.stargate.it.storage.ClusterConnectionInfo;
-import io.stargate.it.storage.ClusterSpec;
 import io.stargate.it.storage.UseStargateContainer;
 import java.io.File;
 import java.net.URL;
@@ -26,7 +23,6 @@ import org.junit.jupiter.api.BeforeEach;
 
 /** This class manages starting Stargate OSGi containers. */
 @UseStargateContainer
-@ClusterSpec(scope = SHARED)
 public class BaseOsgiIntegrationTest {
 
   protected ClusterConnectionInfo backend;

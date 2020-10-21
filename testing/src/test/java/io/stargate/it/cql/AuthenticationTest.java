@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.stargate.auth.model.AuthTokenResponse;
 import io.stargate.it.http.RestUtils;
 import io.stargate.it.http.models.Credentials;
+import io.stargate.it.storage.ClusterSpec;
 import io.stargate.it.storage.StargateConnectionInfo;
 import io.stargate.it.storage.StargateParameters;
 import io.stargate.it.storage.StargateSpec;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+@ClusterSpec // use a dedicated backend
 @StargateSpec(parametersCustomizer = "buildParameters")
 public class AuthenticationTest extends JavaDriverTestBase {
 

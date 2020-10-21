@@ -4,6 +4,7 @@ import io.stargate.db.Persistence;
 import io.stargate.db.dse.DsePersistenceActivator;
 import io.stargate.it.PersistenceTest;
 import io.stargate.it.storage.ClusterConnectionInfo;
+import io.stargate.it.storage.ResourcePool;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
@@ -29,14 +30,17 @@ import org.junit.jupiter.api.BeforeAll;
 public class DsePersistenceIT extends PersistenceTest {
 
   private static File baseDir;
+  private static ResourcePool.Block ipBlock;
   private static DsePersistence persistence;
 
   @BeforeAll
   public static void createDsePersistence(ClusterConnectionInfo backend) throws IOException {
+    ipBlock = ResourcePool.reserveIpBlock();
     baseDir = Files.createTempDirectory("stargate-dse-test").toFile();
     baseDir.deleteOnExit();
 
-    System.setProperty("stargate.listen_address", "127.0.0.11");
+    System.setProperty("stargate.listen_address", ipBlock.firstAddress());
+    System.setProperty("stargate.seed_list", backend.seedAddress());
     System.setProperty("stargate.cluster_name", backend.clusterName());
     System.setProperty("stargate.datacenter", backend.datacenter());
     System.setProperty("stargate.rack", backend.rack());
@@ -54,6 +58,8 @@ public class DsePersistenceIT extends PersistenceTest {
 
   @AfterAll
   public static void cleanup() throws IOException {
+    ResourcePool.releaseIpBlock(ipBlock);
+
     if (persistence != null) {
       persistence.destroy();
     }

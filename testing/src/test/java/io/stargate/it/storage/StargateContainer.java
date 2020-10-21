@@ -18,6 +18,8 @@ package io.stargate.it.storage;
 import static io.stargate.starter.Starter.STARTED_MESSAGE;
 import static java.lang.management.ManagementFactory.getRuntimeMXBean;
 
+import com.datastax.oss.driver.api.core.Version;
+import io.stargate.it.storage.ResourcePool.Block;
 import io.stargate.it.storage.StargateParameters.Builder;
 import java.io.File;
 import java.io.IOException;
@@ -28,11 +30,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map.Entry;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.commons.exec.CommandLine;
 import org.apache.commons.exec.DefaultExecutor;
@@ -41,11 +41,9 @@ import org.apache.commons.exec.Executor;
 import org.apache.commons.exec.LogOutputStream;
 import org.apache.commons.exec.PumpStreamHandler;
 import org.apache.commons.io.FileUtils;
-import org.junit.jupiter.api.extension.AfterAllCallback;
-import org.junit.jupiter.api.extension.AfterEachCallback;
-import org.junit.jupiter.api.extension.BeforeAllCallback;
-import org.junit.jupiter.api.extension.BeforeEachCallback;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.extension.ExtensionContext;
+import org.junit.jupiter.api.extension.ExtensionContext.Namespace;
 import org.junit.jupiter.api.extension.ParameterContext;
 import org.junit.jupiter.api.extension.ParameterResolutionException;
 import org.junit.jupiter.api.extension.ParameterResolver;
@@ -64,65 +62,23 @@ import org.slf4j.LoggerFactory;
  * @see StargateSpec
  * @see StargateParameters
  */
-public class StargateContainer
-    implements BeforeAllCallback,
-        AfterAllCallback,
-        BeforeEachCallback,
-        AfterEachCallback,
-        ParameterResolver {
+public class StargateContainer extends ExternalResource<StargateSpec, StargateContainer.Container>
+    implements ParameterResolver {
   private static final Logger LOG = LoggerFactory.getLogger(StargateContainer.class);
 
   private static final File LIB_DIR = new File(System.getProperty("stargate.libdir"));
   private static final int PROCESS_WAIT_MINUTES =
       Integer.getInteger("stargate.test.process.wait.timeout.minutes", 10);
 
-  private static final AtomicBoolean suiteExecuting = new AtomicBoolean();
-  private static final AtomicBoolean testExecuting = new AtomicBoolean();
-
-  // the first 10 addresses are reserved for storage nodes
-  private static final AtomicInteger stargateAddressStart = new AtomicInteger(11);
   private static final AtomicInteger stargateInstanceSeq = new AtomicInteger();
 
-  private static Container container;
-
-  static {
-    Thread containerShutdown =
-        new Thread("stargate-container-shutdown") {
-          @Override
-          public void run() {
-            try {
-              Container c = container;
-              if (c != null) {
-                c.stop();
-              }
-            } catch (Exception e) {
-              LOG.warn("Exception during global container shutdown: {}", e.getMessage(), e);
-            }
-          }
-        };
-
-    Runtime.getRuntime().addShutdownHook(containerShutdown);
+  protected StargateContainer() {
+    super(StargateSpec.class, "stargate-container", Namespace.GLOBAL);
   }
 
-  private static Container container() {
-    if (container == null) {
-      throw new IllegalStateException("Stargate container has not been configured");
-    }
-
-    return container;
-  }
-
-  private static void enter(AtomicBoolean flag) {
-    if (!flag.compareAndSet(false, true)) {
-      throw new IllegalStateException(
-          String.format(
-              "Concurrent execution with %s is not supported",
-              StargateContainer.class.getSimpleName()));
-    }
-  }
-
-  private static void leave(AtomicBoolean flag) {
-    flag.compareAndSet(true, false);
+  @Override
+  protected StargateSpec defaultSpec() {
+    return DefaultSpecHolder.class.getAnnotation(StargateSpec.class);
   }
 
   private static StargateParameters parameters(StargateSpec spec, ExtensionContext context)
@@ -140,69 +96,26 @@ public class StargateContainer
     return builder.build();
   }
 
-  private static synchronized void start(ExtensionContext context) throws Exception {
-    ClusterConnectionInfo backend = ExternalStorage.connectionInfo();
-
-    StargateSpec spec =
-        context
-            .getElement()
-            .flatMap(e -> Optional.ofNullable(e.getAnnotation(StargateSpec.class)))
-            .orElseGet(
-                () ->
-                    context
-                        .getTestClass()
-                        .flatMap(c -> Optional.ofNullable(c.getAnnotation(StargateSpec.class)))
-                        .orElse(DefaultSpecHolder.get()));
+  @Override
+  protected Container createResource(StargateSpec spec, ExtensionContext context) throws Exception {
+    ClusterConnectionInfo backend =
+        (ClusterConnectionInfo) context.getStore(Namespace.GLOBAL).get("stargate-storage");
+    Assertions.assertNotNull(
+        backend, "Stargate backend is not available in " + context.getUniqueId());
 
     StargateParameters params = parameters(spec, context);
 
-    Container c = container;
-    if (c != null) {
-      if (!c.matches(backend, spec, params)) {
-        c.stop();
-      } else {
-        // reuse container
-        LOG.info("Reusing Stargate container for the next test.");
-        return;
-      }
-    }
-
-    c = new Container(backend, spec, params);
+    Container c = new Container(backend, spec, params);
     c.start();
-    container = c;
-  }
-
-  @Override
-  public void beforeAll(ExtensionContext context) throws Exception {
-    enter(suiteExecuting);
-    start(context);
-  }
-
-  @Override
-  public void afterAll(ExtensionContext context) {
-    leave(suiteExecuting);
-  }
-
-  @Override
-  public void beforeEach(ExtensionContext context) throws Exception {
-    enter(testExecuting);
-    start(context);
-  }
-
-  @Override
-  public void afterEach(ExtensionContext context) throws Exception {
-    leave(testExecuting);
+    return c;
   }
 
   private boolean isStargateConnectionInfo(ParameterContext parameterContext) {
-    return parameterContext.getParameter().getType().isAssignableFrom(StargateConnectionInfo.class);
+    return parameterContext.getParameter().getType() == StargateConnectionInfo.class;
   }
 
   private boolean isStargateEnvInfo(ParameterContext parameterContext) {
-    return parameterContext
-        .getParameter()
-        .getType()
-        .isAssignableFrom(StargateEnvironmentInfo.class);
+    return parameterContext.getParameter().getType() == StargateEnvironmentInfo.class;
   }
 
   @Override
@@ -217,9 +130,9 @@ public class StargateContainer
       ParameterContext parameterContext, ExtensionContext extensionContext)
       throws ParameterResolutionException {
     if (isStargateEnvInfo(parameterContext)) {
-      return container();
+      return getResource(extensionContext);
     } else if (isStargateConnectionInfo(parameterContext)) {
-      return container().nodes.get(0);
+      return getResource(extensionContext).nodes.get(0);
     }
 
     throw new IllegalStateException("Unknown parameter: " + parameterContext);
@@ -230,32 +143,21 @@ public class StargateContainer
   }
 
   @StargateSpec
-  private static final class DefaultSpecHolder {
+  private static final class DefaultSpecHolder {}
 
-    private static StargateSpec get() {
-      return DefaultSpecHolder.class.getAnnotation(StargateSpec.class);
-    }
-  }
-
-  private static class Container implements StargateEnvironmentInfo {
+  protected static class Container implements StargateEnvironmentInfo, AutoCloseable {
 
     private final UUID id = UUID.randomUUID();
-    private final int instanceNum = stargateInstanceSeq.getAndIncrement();
-    private final ClusterConnectionInfo backend;
-    private final StargateSpec spec;
-    private final StargateParameters parameters;
+    private final ResourcePool.Block ipBlock = ResourcePool.reserveIpBlock();
     private final List<Node> nodes = new ArrayList<>();
 
     private Container(
         ClusterConnectionInfo backend, StargateSpec spec, StargateParameters parameters)
         throws Exception {
-      this.backend = backend;
-      this.spec = spec;
-      this.parameters = parameters;
-
+      int instanceNum = stargateInstanceSeq.getAndIncrement();
       Env env = new Env(spec.nodes());
       for (int i = 0; i < spec.nodes(); i++) {
-        nodes.add(new Node(i, instanceNum, backend, env, parameters));
+        nodes.add(new Node(i, instanceNum, backend, env, ipBlock, parameters));
       }
     }
 
@@ -264,12 +166,16 @@ public class StargateContainer
         node.start();
       }
 
+      ShutdownHook.add(this);
+
       for (Node node : nodes) {
         node.awaitReady();
       }
     }
 
     private void stop() {
+      ShutdownHook.remove(this);
+
       for (Node node : nodes) {
         node.stopNode();
       }
@@ -277,13 +183,13 @@ public class StargateContainer
       for (Node node : nodes) {
         node.awaitExit();
       }
+
+      ResourcePool.releaseIpBlock(ipBlock);
     }
 
-    private boolean matches(
-        ClusterConnectionInfo backend, StargateSpec spec, StargateParameters parameters) {
-      return this.backend.id().equals(backend.id())
-          && this.spec.equals(spec)
-          && this.parameters.equals(parameters);
+    @Override
+    public void close() {
+      stop();
     }
 
     @Override
@@ -318,13 +224,14 @@ public class StargateContainer
         int instanceNum,
         ClusterConnectionInfo backend,
         Env env,
+        Block ipBlock,
         StargateParameters params)
         throws Exception {
       super("stargate-runner-" + nodeIndex);
 
       this.nodeIndex = nodeIndex;
       this.instanceNum = instanceNum;
-      this.listenAddress = env.listenAddress(nodeIndex);
+      this.listenAddress = ipBlock.address(nodeIndex);
       this.cqlPort = env.cqlPort();
       this.clusterName = backend.clusterName();
       this.datacenter = backend.datacenter();
@@ -333,7 +240,7 @@ public class StargateContainer
 
       cmd = new CommandLine("java");
       cmd.addArgument("-Dstargate.auth_api_enable_username_token=true");
-      cmd.addArgument("-Dstargate.libdir=" + env.libDir(nodeIndex).getAbsolutePath());
+      cmd.addArgument("-Dstargate.libdir=" + LIB_DIR.getAbsolutePath());
       cmd.addArgument("-Dstargate.bundle.cache.dir=" + cacheDir.getAbsolutePath());
 
       for (Entry<String, String> e : params.systemProperties().entrySet()) {
@@ -349,15 +256,19 @@ public class StargateContainer
       }
 
       cmd.addArgument("-jar");
-      cmd.addArgument(env.stargateJar(nodeIndex).getAbsolutePath());
+      cmd.addArgument(env.stargateJar().getAbsolutePath());
       cmd.addArgument("--cluster-seed");
       cmd.addArgument(backend.seedAddress());
       cmd.addArgument("--seed-port");
       cmd.addArgument(String.valueOf(backend.storagePort()));
       cmd.addArgument("--cluster-name");
       cmd.addArgument(clusterName);
+
+      Version backendVersion = Version.parse(backend.clusterVersion());
+      String version = String.format("%d.%d", backendVersion.getMajor(), backendVersion.getMinor());
       cmd.addArgument("--cluster-version");
-      cmd.addArgument(backend.clusterVersion());
+      cmd.addArgument(version);
+
       cmd.addArgument("--dc");
       cmd.addArgument(datacenter);
       cmd.addArgument("--rack");
@@ -383,24 +294,9 @@ public class StargateContainer
     @Override
     public void run() {
       try {
-        LogOutputStream out =
-            new LogOutputStream() {
-              @Override
-              protected void processLine(String line, int logLevel) {
-                if (line.contains(STARTED_MESSAGE)) {
-                  ready.countDown();
-                }
-
-                LOG.info("sg{}-{}> {}", instanceNum, nodeIndex, line);
-              }
-            };
-        LogOutputStream err =
-            new LogOutputStream() {
-              @Override
-              protected void processLine(String line, int logLevel) {
-                LOG.error("sg{}-{}> {}", instanceNum, nodeIndex, line);
-              }
-            };
+        String prefix = String.format("sg%d-%d", instanceNum, nodeIndex);
+        LogOutputStream out = new OutputStreamLogger(prefix, false, ready, STARTED_MESSAGE);
+        LogOutputStream err = new OutputStreamLogger(prefix, true, ready, STARTED_MESSAGE);
         Executor executor = new DefaultExecutor();
         executor.setExitValues(new int[] {0, 143}); // normal exit, normal termination by SIGKILL
         executor.setStreamHandler(new PumpStreamHandler(out, err));
@@ -411,7 +307,8 @@ public class StargateContainer
 
           int retValue = executor.execute(cmd);
 
-          LOG.info("Stargate node {} existed with return code {}", nodeIndex, retValue);
+          LOG.info(
+              "Stargate {}, node {} existed with return code {}", instanceNum, nodeIndex, retValue);
         } catch (IOException e) {
           LOG.info("Unable to run Stargate node {}: {}", nodeIndex, e.getMessage(), e);
         }
@@ -427,7 +324,7 @@ public class StargateContainer
     }
 
     private void stopNode() {
-      LOG.info("Stopping Stargate node {}", nodeIndex);
+      LOG.info("Stopping Stargate {}, node {}", instanceNum, nodeIndex);
       watchDog.destroyProcess();
     }
 
@@ -485,12 +382,8 @@ public class StargateContainer
   private static class Env {
 
     private final List<Integer> ports = new ArrayList<>();
-    private final int addressStart;
 
     private Env(int nodeCount) throws IOException {
-      // Note: do not reuse addresses
-      addressStart = stargateAddressStart.getAndAdd(nodeCount);
-
       // Allocate `nodeCount` random ports
       List<ServerSocket> sockets = new ArrayList<>();
       for (int i = 0; i < nodeCount; i++) {
@@ -504,10 +397,6 @@ public class StargateContainer
       }
     }
 
-    private String listenAddress(int index) {
-      return "127.0.0." + (addressStart + index);
-    }
-
     private int jmxPort(int index) {
       return ports.get(index);
     }
@@ -516,12 +405,10 @@ public class StargateContainer
       return 9043;
     }
 
-    private File libDir(int nodeNumber) throws IOException {
-      return LIB_DIR;
-    }
-
-    private File stargateJar(int nodeNumber) throws IOException {
-      return Arrays.stream(LIB_DIR.listFiles())
+    private File stargateJar() {
+      File[] files = LIB_DIR.listFiles();
+      Assertions.assertNotNull(files, "No files in " + LIB_DIR.getAbsolutePath());
+      return Arrays.stream(files)
           .filter(f -> f.getName().startsWith("stargate-starter"))
           .filter(f -> f.getName().endsWith(".jar"))
           .findFirst()
