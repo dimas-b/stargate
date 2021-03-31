@@ -57,17 +57,21 @@ import org.apache.cassandra.cql3.QueryOptions;
 import org.apache.cassandra.cql3.QueryProcessor;
 import org.apache.cassandra.cql3.statements.BatchStatement;
 import org.apache.cassandra.db.Keyspace;
+import org.apache.cassandra.db.marshal.AbstractType;
 import org.apache.cassandra.db.marshal.UserType;
 import org.apache.cassandra.exceptions.AuthenticationException;
 import org.apache.cassandra.gms.ApplicationState;
 import org.apache.cassandra.gms.EndpointState;
 import org.apache.cassandra.gms.Gossiper;
+import org.apache.cassandra.gms.IEndpointStateChangeSubscriber;
+import org.apache.cassandra.gms.VersionedValue;
 import org.apache.cassandra.schema.ColumnMetadata;
 import org.apache.cassandra.schema.IndexMetadata;
 import org.apache.cassandra.schema.KeyspaceMetadata;
 import org.apache.cassandra.schema.MigrationManager;
 import org.apache.cassandra.schema.SchemaChangeListener;
 import org.apache.cassandra.schema.SchemaManager;
+import org.apache.cassandra.schema.TableId;
 import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.schema.ViewTableMetadata;
 import org.apache.cassandra.service.CassandraDaemon;
@@ -199,6 +203,196 @@ public class DsePersistence
         });
 
     cassandraDaemon.activate(false);
+
+    Gossiper.instance.register(
+        new IEndpointStateChangeSubscriber() {
+          @Override
+          public void onJoin(InetAddress endpoint, EndpointState epState) {
+            logger.info("EP: join: {}, state: {}", endpoint, epState);
+            logSchemaIds();
+          }
+
+          @Override
+          public void beforeChange(
+              InetAddress endpoint,
+              EndpointState currentState,
+              ApplicationState newStateKey,
+              VersionedValue newValue) {
+            logger.info(
+                "EP: before: {}, state: {}, key: {}, value: {}",
+                endpoint,
+                currentState,
+                newStateKey,
+                newValue);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value) {
+            logger.info("EP: change: {}, state: {}, value: {}", endpoint, state, value);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onAlive(InetAddress endpoint, EndpointState state) {
+            logger.info("EP: alive: {}, state: {}", endpoint, state);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onDead(InetAddress endpoint, EndpointState state) {
+            logger.info("EP: dead: {}, state: {}", endpoint, state);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onRemove(InetAddress endpoint) {
+            logger.info("EP: remove: {}", endpoint);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onRestart(InetAddress endpoint, EndpointState state) {
+            logger.info("EP: restart: {}, state: {}", endpoint, state);
+            logSchemaIds();
+          }
+        });
+
+    SchemaManager.instance.registerListener(
+        new SchemaChangeListener() {
+          @Override
+          public void onCreateKeyspace(String keyspace) {
+            logger.info("SCHEMA: ks: {}", keyspace);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onCreateTable(String keyspace, String table) {
+            logger.info("SCHEMA: ks: {}, table: {}", keyspace, table);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onCreateView(String keyspace, String view) {
+            logger.info("SCHEMA: ks: {}, view: {}", keyspace, view);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onCreateType(String keyspace, String type) {
+            logger.info("SCHEMA: ks: {}, type: {}", keyspace, type);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onCreateFunction(
+              String keyspace, String function, List<AbstractType<?>> argumentTypes) {
+            logger.info("SCHEMA: ks: {}, fun: {}", keyspace, function);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onCreateAggregate(
+              String keyspace, String aggregate, List<AbstractType<?>> argumentTypes) {
+            logger.info("SCHEMA: ks: {}, agg: {}", keyspace, aggregate);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onAlterKeyspace(String keyspace) {
+            logger.info("SCHEMA: alter ks: {}", keyspace);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onPreAlterTable(TableMetadata before, TableMetadata after) {
+            logger.info("SCHEMA: pre alter table: {}", before.name);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onAlterTable(String keyspace, String table, boolean affectsStatements) {
+            logger.info("SCHEMA: alter ks: {}, table: {}", keyspace, table);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onAlterView(String keyspace, String view, boolean affectsStataments) {
+            logger.info("SCHEMA: alter ks: {}, view: {}", keyspace, view);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onAlterType(String keyspace, String type) {
+            logger.info("SCHEMA: alter ks: {}, type: {}", keyspace, type);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onAlterFunction(
+              String keyspace, String function, List<AbstractType<?>> argumentTypes) {
+            logger.info("SCHEMA: alter ks: {}, fun: {}", keyspace, function);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onAlterAggregate(
+              String keyspace, String aggregate, List<AbstractType<?>> argumentTypes) {
+            logger.info("SCHEMA: alter ks: {}, agg: {}", keyspace, aggregate);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onDropKeyspace(String keyspace) {
+            logger.info("SCHEMA: drop ks: {}", keyspace);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onDropTable(String keyspace, String table, TableId tableId) {
+            logger.info("SCHEMA: drop ks: {}, table: {}", keyspace, table);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onDropView(String keyspace, String view, TableId tableId) {
+            logger.info("SCHEMA: drop ks: {}, view: {}", keyspace, view);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onDropType(String keyspace, String type) {
+            logger.info("SCHEMA: drop ks: {}, type: {}", keyspace, type);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onDropFunction(
+              String keyspace, String function, List<AbstractType<?>> argumentTypes) {
+            logger.info("SCHEMA: drop ks: {}, fun: {}", keyspace, function);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onDropAggregate(
+              String keyspace, String aggregate, List<AbstractType<?>> argumentTypes) {
+            logger.info("SCHEMA: drop ks: {}, agg: {}", keyspace, aggregate);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onCreateVirtualKeyspace(String keyspace) {
+            logger.info("SCHEMA: virt ks: {}", keyspace);
+            logSchemaIds();
+          }
+
+          @Override
+          public void onCreateVirtualTable(String keyspace, String table) {
+            logger.info("SCHEMA: virt ks: {}, table: {}", keyspace, table);
+            logSchemaIds();
+          }
+        });
+
     Throwable t = throwableFromMainThread.get();
     if (t != null) {
       // Stop initialization if DSE is not started
@@ -317,6 +511,28 @@ public class DsePersistence
             .distinct()
             .count()
         <= 1;
+  }
+
+  void logSchemaIds() {
+    // Collect schema IDs from storage nodes and check that we have at most 1 distinct ID.
+    Gossiper.instance
+        .getLiveMembers()
+        .forEach(
+            ep -> {
+              logger.info("GOSSIP SCHEMA: {}: {}", ep, Gossiper.instance.getSchemaVersion(ep));
+            });
+
+    logger.info("LOCAL SCHEMA: {}", SchemaManager.instance.getVersion());
+
+    SchemaManager.instance.getKeyspaces().stream()
+        .filter(ks -> !"system".equals(ks) && !"system_schema".equals(ks))
+        .forEach(
+            ks -> {
+              logger.info(
+                  "KEYSPACE: {}, meta: {}",
+                  ks,
+                  SchemaManager.instance.getKeyspaceInstance(ks).getMetadata());
+            });
   }
 
   @Override
