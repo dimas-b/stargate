@@ -1,5 +1,7 @@
 package io.stargate.db.dse.impl;
 
+import static org.apache.cassandra.schema.SchemaKeyspace.DROPPED_COLUMNS;
+
 import com.datastax.bdp.db.util.ProductType;
 import com.datastax.bdp.db.util.ProductVersion;
 import com.google.common.annotations.VisibleForTesting;
@@ -38,7 +40,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import javax.annotation.Nonnull;
@@ -56,9 +60,17 @@ import org.apache.cassandra.cql3.PageSize;
 import org.apache.cassandra.cql3.QueryOptions;
 import org.apache.cassandra.cql3.QueryProcessor;
 import org.apache.cassandra.cql3.statements.BatchStatement;
+import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Keyspace;
+import org.apache.cassandra.db.PartitionRangeReadCommand;
 import org.apache.cassandra.db.marshal.AbstractType;
+import org.apache.cassandra.db.marshal.UTF8Type;
 import org.apache.cassandra.db.marshal.UserType;
+import org.apache.cassandra.db.partitions.PartitionIterator;
+import org.apache.cassandra.db.rows.FlowablePartition;
+import org.apache.cassandra.db.rows.FlowablePartitions;
+import org.apache.cassandra.db.rows.Row;
+import org.apache.cassandra.db.rows.RowIterator;
 import org.apache.cassandra.exceptions.AuthenticationException;
 import org.apache.cassandra.gms.ApplicationState;
 import org.apache.cassandra.gms.EndpointState;
@@ -70,6 +82,8 @@ import org.apache.cassandra.schema.IndexMetadata;
 import org.apache.cassandra.schema.KeyspaceMetadata;
 import org.apache.cassandra.schema.MigrationManager;
 import org.apache.cassandra.schema.SchemaChangeListener;
+import org.apache.cassandra.schema.SchemaConstants;
+import org.apache.cassandra.schema.SchemaKeyspace;
 import org.apache.cassandra.schema.SchemaManager;
 import org.apache.cassandra.schema.TableId;
 import org.apache.cassandra.schema.TableMetadata;
@@ -92,7 +106,9 @@ import org.apache.cassandra.transport.messages.ResultMessage;
 import org.apache.cassandra.transport.messages.StartupMessage;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.flow.Flow;
 import org.apache.cassandra.utils.flow.RxThreads;
+import org.apache.cassandra.utils.time.ApolloTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -533,6 +549,78 @@ public class DsePersistence
                   ks,
                   SchemaManager.instance.getKeyspaceInstance(ks).getMetadata());
             });
+
+    SchemaKeyspace.ALL.forEach(
+        t -> {
+          if (t.equals(DROPPED_COLUMNS)) {
+            return;
+          }
+
+          ColumnFamilyStore cfs =
+              Keyspace.open(SchemaConstants.SCHEMA_KEYSPACE_NAME).getColumnFamilyStore(t);
+          PartitionRangeReadCommand read =
+              PartitionRangeReadCommand.allDataRead(
+                  cfs.metadata(), ApolloTime.systemClockSecondsAsInt());
+          Flow<FlowablePartition> flow = read.executeInternal();
+          try (PartitionIterator schema = FlowablePartitions.toPartitionsFiltered(flow)) {
+            while (schema.hasNext()) {
+              try (RowIterator partition = schema.next()) {
+                if (partition == null) continue;
+
+                String ks = UTF8Type.instance.compose(partition.partitionKey().getTempKey());
+                if ("system".equals(ks) || "system_schema".equals(ks)) {
+                  continue;
+                }
+
+                logger.info("DIGEST: t: {}, ks: {}", t, ks);
+
+                //                partition
+                //                    .columns()
+                //                    .regulars
+                //                    .forEach(
+                //                        c -> {
+                //                          logger.info("DIGEST: t: {}, ks: {}, rcol: {}", t, ks,
+                // c.name);
+                //                        });
+                //                partition
+                //                    .columns()
+                //                    .statics
+                //                    .forEach(
+                //                        c -> {
+                //                          logger.info("DIGEST: t: {}, ks: {}, scol: {}", t, ks,
+                // c.name);
+                //                        });
+
+                AtomicInteger rnum = new AtomicInteger();
+                Consumer<Row> rowDumper =
+                    r -> {
+                      String cc = r.clustering().toString(cfs.metadata());
+                      r.cells()
+                          .forEach(
+                              c -> {
+                                ColumnMetadata col = c.column();
+                                AbstractType<?> type = col.type;
+                                Object value = type.compose(c.value());
+                                logger.info(
+                                    "DIGEST-DATA: t: {} [{}]: ks: {}, {}: col: {}, val: {}",
+                                    t,
+                                    rnum.get(),
+                                    ks,
+                                    cc,
+                                    col.name,
+                                    value);
+                              });
+                    };
+
+                rowDumper.accept(partition.staticRow());
+                while (partition.hasNext()) {
+                  rnum.incrementAndGet();
+                  rowDumper.accept(partition.next());
+                }
+              }
+            }
+          }
+        });
   }
 
   @Override
